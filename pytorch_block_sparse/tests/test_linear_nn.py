@@ -8,9 +8,9 @@ from pytorch_block_sparse import (
     BlockSparseLinear,
     BlockSparseMatrix,
     BlockSparseMatrixEmulator,
+    PseudoBlockSparseLinear,
 )
 from pytorch_block_sparse.block_sparse_linear import PseudoBlockSparseLinear
-
 
 class TestFun(TestCase):
     def test0(self):

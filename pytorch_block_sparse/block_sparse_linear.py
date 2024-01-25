@@ -54,6 +54,7 @@ class BlockSparseLinearFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        print("BlockSparseLinearFunction.backward")
         check = False
         verbose = False
         input, weight_data = ctx.saved_tensors
@@ -166,9 +167,11 @@ class BlockSparseLinear(nn.Module):
         torch_nn_linear=None,
         verbose: bool = False,
         block_shape: Tuple[int, int] = (32, 32),
+        block_mask = None,
     ):
         super(BlockSparseLinear, self).__init__()
         self.fn = BlockSparseLinearFunction.apply
+        self.dense_fn = torch.nn.functional.linear
         self.verbose = verbose
         self.block_shape = block_shape
         self._optimized = (
@@ -186,7 +189,7 @@ class BlockSparseLinear(nn.Module):
             )
         if out_features % self.block_shape[0] != 0:
             raise Exception(
-                f"BlockSparseLinear invalid in_features={in_features}, should be multiple of {self.block_shape[0]}"
+                f"BlockSparseLinear invalid out_features={out_features}, should be multiple of {self.block_shape[0]}"
             )
 
         if density < 0 or density > 1:
@@ -199,6 +202,8 @@ class BlockSparseLinear(nn.Module):
 
         block_shape = self.block_shape
 
+        self.block_mask = block_mask
+
         if self._optimized:
             BlockSparseMatrixConstructor = BlockSparseMatrix
         else:
@@ -206,17 +211,29 @@ class BlockSparseLinear(nn.Module):
 
         if torch_nn_linear is not None:
             with torch.no_grad():
-                weight = BlockSparseMatrixConstructor.from_dense(torch_nn_linear.weight, block_shape, self.block_count)
-            weight.multiply_(1.0 / math.sqrt(density))
+                # add the sparse layer here to calulate its representation using the block mask
+                sparse_weight, dense_block_mask = BlockSparseMatrixConstructor.from_dense(torch_nn_linear.weight, block_shape, self.block_count, block_mask=self.block_mask)
+            
+            # sparse_weight.multiply_(1.0 / math.sqrt(density))
+            dense_weight = torch_nn_linear.weight * dense_block_mask
+            # dense_weight.multiply_(1.0 / math.sqrt(1-density))
         else:
-            weight = BlockSparseMatrixConstructor.randn(
+            sparse_weight, dense_weight = BlockSparseMatrixConstructor.randn(
                 (out_features, in_features),
                 self.block_count,
                 blocks=None,
                 block_shape=block_shape,
                 device="cuda",
             )
-        self.weight = weight
+            # dense_weight = BlockSparseMatrixConstructor.randn(
+            #     (out_features, in_features),
+            #     int(self.block_count/density - self.block_count),
+            #     blocks=None,
+            #     block_shape=block_shape,
+            #     device="cuda",
+            # )
+        self.sparse_weight = sparse_weight
+        self.dense_weight = dense_weight
 
         if bias:
             self.bias = nn.Parameter(torch.zeros(out_features, device="cuda"))
@@ -227,7 +244,10 @@ class BlockSparseLinear(nn.Module):
             self.register_parameter("bias", None)
 
     def forward(self, x):
-        x = self.fn(x, self.weight.get_differentiable_data(), self.weight)
+        # x = self.fn(x, self.weight.get_differentiable_data(), self.weight)
+        x_sparse = self.fn(x, self.sparse_weight.get_differentiable_data(), self.sparse_weight)
+        x_dense = self.dense_fn(x, self.dense_weight, self.bias)
+        x = x_dense + x_sparse
         if self.bias is not None:
             x = x + self.bias
         return x

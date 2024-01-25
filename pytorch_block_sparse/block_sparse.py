@@ -2,6 +2,9 @@ import numpy
 import torch
 import torch.nn
 
+import bitsandbytes as bnb
+# from bitsandbytes.bitsandbytes.functional import quantize_4bit
+
 
 class BlockSparseMatrixBase(torch.nn.Module):
     # cols is a list of nonzero block column indexes (int32)
@@ -21,6 +24,8 @@ class BlockSparseMatrixBase(torch.nn.Module):
         self.block_shape = tuple(block_shape)
 
         self.data = torch.nn.Parameter(data)
+
+        self.block_mask = block_mask
 
         self.rebuild(block_mask, callback=False)
 
@@ -286,6 +291,7 @@ class BlockSparseMatrixBase(torch.nn.Module):
         block_shape=(32, 32),
         device="cuda",
         positive=False,
+        block_mask=None,
     ):
         ret = cls.zeros(shape, n_blocks, blocks, block_shape, device)
         with torch.no_grad():
@@ -294,10 +300,41 @@ class BlockSparseMatrixBase(torch.nn.Module):
             else:
                 ret.data.normal_()
         ret.updated_data()
-        return ret
+
+        # Block mask holds the weights which will be used for the sparse linear layer
+        
+        block_mask = ret.block_mask
+        # Take the complement of the sparse mask
+        mask_indices = torch.argwhere(~block_mask).to(dtype=torch.long, device=device)
+        dense_num_blocks = torch.sum(~block_mask).item()
+        masking_weight = torch.zeros(shape).to(dtype=torch.float, device=device)
+
+        # 1's in sparse mask => weights are chosen => 1's on dense mask should be retained
+        
+        for i in range(dense_num_blocks):
+            xs = torch.arange(mask_indices[i,0]*block_shape[0], (mask_indices[i,0]+1)*block_shape[0])
+            ys = torch.arange(mask_indices[i,1]*block_shape[1], (mask_indices[i,1]+1)*block_shape[1])
+            x, y = torch.meshgrid(xs, ys, indexing='xy')
+            x = x.flatten()
+            y = y.flatten()
+            masking_weight[x,y] = 1
+
+        dense_weight = torch.empty(shape).normal_(mean=0,std=1).to(device=device)*masking_weight
+
+        return ret, dense_weight
 
     @classmethod
-    def from_dense(cls, dense, block_shape=(32, 32), block_count=None, blocks=None, slow=False, out=None):
+    def from_dense(cls, dense, block_shape=(32, 32), block_count=None, blocks=None, slow=False, out=None, block_mask=None):
+        # Block mask holds the weights which will be used for the sparse linear layer
+        if block_mask is None:
+            X, Y = cls.blocks_count_(dense.shape, block_shape)
+            positions = numpy.random.choice(X * Y, size=block_count, replace=False)
+            positions = torch.tensor(positions, dtype=torch.int64, device=dense.device).sort()[0]
+            block_mask = torch.zeros(X * Y, dtype=torch.bool, device=dense.device)
+            block_mask[positions] = True
+            block_mask = block_mask.view(X, Y)
+            block_count = torch.sum(~block_mask).item()
+
         if out is None:
             if blocks is None:
                 dense_block_count = (dense.shape[0] * dense.shape[1]) // (block_shape[0] * block_shape[1])
@@ -313,45 +350,126 @@ class BlockSparseMatrixBase(torch.nn.Module):
                 blocks=blocks,
                 device=dense.device,
             )
+            #  zero out dense at the mask locations
+            # sparse_ret = cls.zeros(
+            #     dense.shape,
+            #     n_blocks=dense_block_count - block_count,
+            #     block_shape=block_shape,
+            #     blocks=blocks,
+            #     device=dense.device,
+            # )
         else:
             ret = out
+            # sparse_ret = out
+        
+        mask_indices = torch.argwhere(~block_mask).to(dtype=torch.long, device=dense.device)
+        dense_num_blocks = torch.sum(~block_mask).item()
+        masking_weight = torch.zeros(dense.shape).to(dtype=torch.float, device=dense.device)
+
+        # 1's in sparse mask => weights are chosen => 1's on dense mask should be retained
+        
+        for i in range(dense_num_blocks):
+            xs = torch.arange(mask_indices[i,0]*block_shape[0], (mask_indices[i,0]+1)*block_shape[0])
+            ys = torch.arange(mask_indices[i,1]*block_shape[1], (mask_indices[i,1]+1)*block_shape[1])
+            x, y = torch.meshgrid(xs, ys, indexing='xy')
+            x = x.flatten()
+            y = y.flatten()
+            # x = torch.arange(mask_indices[i,0]*block_shape[0], (mask_indices[i,0]+1)*block_shape[0]).tolist()
+            # y = torch.arange(mask_indices[i,1]*block_shape[1], (mask_indices[i,1]+1)*block_shape[1]).tolist()
+            masking_weight[x,y] = 1
+
+        # Build the indices
+        blocks, cols_a, row_start_ends_a, rows_b, col_start_ends_b = ret.build_indices(block_mask)
+        # sparse_blocks, sparse_cols_a, sparse_row_start_ends_a, sparse_rows_b, sparse_col_start_ends_b = sparse_ret.build_indices(sparse_block_mask)
+        # fast_coo = ret.build_coo_block_index_fast(blocks, cols_a, row_start_ends_a)
+
+        sparse_check = dense - masking_weight*dense
+
+        # print(masking_weight)
+        # print(dense)
+        # print(masking_weight*dense)
+        
 
         if out is not None or blocks is not None or block_count == dense_block_count:
             # In case we keep the full matrix (block_count == dense_block_count), we make sure the
             # order is the right one, mostly for testing purposes.
-            coo = ret.build_coo_block_index().long()
+            # coo = ret.build_coo_block_index().long()
+            fast_coo = ret.build_coo_block_index_fast(blocks, cols_a, row_start_ends_a).long()
+            # sparse_fast_coo = sparse_ret.build_coo_block_index_fast(sparse_blocks, sparse_cols_a, sparse_row_start_ends_a).long()
             if slow:
                 # Legacy version, used for testing only
-                for i in range(coo.shape[1]):
-                    r, c = coo[0][i], coo[1][i]
+                # for i in range(coo.shape[1]):
+                for i in range(fast_coo.shape[1]):
+                    # r, c = coo[0][i], coo[1][i]
+                    r, c = fast_coo[0][i], fast_coo[1][i]
                     bs = ret.block_shape
                     part = dense[r * bs[0] : (r + 1) * bs[0], c * bs[1] : (c + 1) * bs[1]]
                     part = part.t().reshape(block_shape[0], block_shape[1])
                     with torch.no_grad():
                         ret.data[i * bs[0] : (i + 1) * bs[0]] = part
+                
+                # for i in range(sparse_fast_coo.shape[1]):
+                #     # r, c = coo[0][i], coo[1][i]
+                #     r, c = sparse_fast_coo[0][i], sparse_fast_coo[1][i]
+                #     bs = sparse_ret.block_shape
+                #     part = dense[r * bs[0] : (r + 1) * bs[0], c * bs[1] : (c + 1) * bs[1]]
+                #     part = part.t().reshape(block_shape[0], block_shape[1])
+                #     with torch.no_grad():
+                #         sparse_ret.data[i * bs[0] : (i + 1) * bs[0]] = part
             else:
                 dense2 = dense.reshape(
                     dense.shape[0] // block_shape[0], block_shape[0], dense.shape[1] // block_shape[1], block_shape[1]
                 )
+                # sparse_check2 = sparse_check.reshape(
+                #     dense.shape[0] // block_shape[0], block_shape[0], dense.shape[1] // block_shape[1], block_shape[1]
+                # )
                 dense2 = dense2.transpose(1, 2)
+                # sparse_check2 = sparse_check2.transpose(1, 2)
                 dense2 = dense2.transpose(2, 3)
+                # sparse_check2 = sparse_check2.transpose(2, 3)
                 dense2 = dense2.reshape(-1, block_shape[0], block_shape[1])
-                indices = coo[0] * (dense.shape[1] // block_shape[1]) + coo[1]
+                # sparse_check2 = sparse_check2.reshape(-1, block_shape[0], block_shape[1])
+                # indices = coo[0] * (dense.shape[1] // block_shape[1]) + coo[1]
+                indices = fast_coo[0] * (dense.shape[1] // block_shape[1]) + fast_coo[1]
+                # sparse_check_indices = fast_coo[0] * (dense.shape[1] // block_shape[1]) + fast_coo[1]
+                # sparse_indices = sparse_fast_coo[0] * (dense.shape[1] // block_shape[1]) + sparse_fast_coo[1]
                 indices = indices.unsqueeze(-1).unsqueeze(-1).expand(-1, block_shape[0], block_shape[1])
+                # sparse_check_indices = sparse_check_indices.unsqueeze(-1).unsqueeze(-1).expand(-1, block_shape[0], block_shape[1])
+                # sparse_indices = sparse_indices.unsqueeze(-1).unsqueeze(-1).expand(-1, block_shape[0], block_shape[1])
                 new_data = torch.gather(dense2, 0, indices)
+                # sparse_check_data = torch.gather(sparse_check2, 0, sparse_check_indices)
+                # sparse_new_data = torch.gather(dense2, 0, sparse_indices)
                 new_data = new_data.reshape(-1, block_shape[1])
+                # sparse_check_data = sparse_check_data.reshape(-1, block_shape[1])
+                # sparse_new_data = sparse_new_data.reshape(-1, block_shape[1])
+
+                # if torch.allclose(sparse_check_data, new_data, atol=1e-3):
+                #     print("test passed lolll")
+                # else:
+                #     print("test failed lolll")
+
                 with torch.no_grad():
                     ret.data.copy_(new_data)
+                    # sparse_ret.data.copy_(sparse_new_data)
         else:
             # We just keep the first elements in the dense matrix
             # Of course this only captures the statistical distribution in the dense matrix
             param_count = ret.data.numel()
+            # sparse_param_count = sparse_ret.data.numel()
             with torch.no_grad():
                 ret.data.copy_(dense.flatten()[:param_count].reshape(ret.data.shape))
+                # sparse_ret.data.copy_(dense.flatten()[:sparse_param_count].reshape(ret_sparse.data.shape))
 
         ret.updated_data()
+        # sparse_ret.updated_data()
 
-        return ret
+        # w_4bit, quant_state = bnb.functional.quantize_4bit(ret.data, blocksize=block_shape[0]*block_shape[1], compress_statistics=False,
+        #                                                    quant_type='fp4', quant_storage=torch.uint8)
+        
+        # ret.data.copy_(w_4bit)
+
+        return ret, masking_weight
+        # return ret, sparse_ret
 
     def __repr__(self):
         return "%s(shape=%s, cols=%s, row_start_ends_a=%s, data=%s, block_shape=%s)" % (
@@ -402,6 +520,40 @@ class BlockSparseMatrixBase(torch.nn.Module):
         summary = summary.t()
         return summary[:2]
 
+    def build_coo_block_index_fast(self, blocks, cols_a, row_start_ends_a):
+        device = cols_a.device
+        # Build a tensor to store the row indices.
+        # It's one element too long for the moment, we'll trim it later
+        rows = torch.zeros((cols_a.shape[0] + 1), dtype=self.int_type, device=device)
+
+        # Change self.row_start_ends_a to the right type
+        row_end_prepare = row_start_ends_a[1:].long()
+
+        # Add ones to the start position of each new row
+        rows.index_add_(
+            0,
+            row_end_prepare,
+            torch.ones(size=row_end_prepare.shape, dtype=self.int_type, device=device),
+        )
+
+        # Accumulate those start positions to fill the remaining positions
+        rows = rows.cumsum(0).to(dtype=self.int_type)
+
+        # Trim the last element: it's just a left over
+        rows = rows[:-1].unsqueeze(-1)
+
+        # Build the coo indexes
+        summary = torch.cat([rows, self.cols_a], -1)
+
+        _, indices = summary[:, 2].sort()
+        summary = summary[indices]
+        if self.check_:
+            compare = summary[:, 2] == torch.arange(0, summary.shape[0], device=summary.device)
+            assert compare.all()
+
+        summary = summary.t()
+        return summary[:2]
+
     def to_sparse(self, data_replace=None):
         coo = self.build_coo_block_index().long()
 
@@ -411,7 +563,7 @@ class BlockSparseMatrixBase(torch.nn.Module):
             data = self.data
         data = data.reshape(-1, self.block_shape[1], self.block_shape[0])
         data = data.transpose(1, 2)
-        out = torch.sparse.FloatTensor(
+        out = torch.sparse_coo_tensor(
             coo,
             data,
             (self.shape[0] // self.block_shape[0], self.shape[1] // self.block_shape[1])
