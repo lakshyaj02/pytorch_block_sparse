@@ -14,8 +14,7 @@ from pytorch_pretrained_vit import ViT
 import re
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
-# from huggingface_hub import login
-# login(token="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")
+
 
 from quant_groups import dequantize
 from datautils import get_loaders
