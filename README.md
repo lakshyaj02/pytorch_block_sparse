@@ -10,7 +10,7 @@ The goal of this library is to show that **sparse matrices can be used in neural
 Combined with dense and sparse quantization using block structures based on SpQR, this method produces models which are 50% smaller than the original with lesser overheads due to clock sparse representation of the weights.
 
 ## Original code
-This work is based on the [pytorch block sparse]([https://github.com/huggingface/pytorch_block_sparse]) proof of concept by [Yulhwa Kim](https://github.com/YulhwaKim).
+This work is based on the [pytorch block sparse](https://github.com/huggingface/pytorch_block_sparse) proof of concept by [Yulhwa Kim](https://github.com/YulhwaKim).
 
 It is using C++ CUDA templates for block-sparse matrix multiplication based on [CUTLASS](https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/).
 
