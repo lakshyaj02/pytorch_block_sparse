@@ -2,8 +2,6 @@ from contextlib import contextmanager
 import time
 import os
 
-# os.environ['HF_HOME'] = 'scratch1/09903/lakshya0202'
-
 import torch
 import torch.nn as nn
 from tqdm import trange
@@ -14,7 +12,6 @@ from pytorch_pretrained_vit import ViT
 import re
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
-
 
 from quant_groups import dequantize
 from datautils import get_loaders
