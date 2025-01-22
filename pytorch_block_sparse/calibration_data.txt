@@ -1,0 +1,50 @@
+pajama - 1024
+wikitext2 perplexity = 25.6329
+ptb perplexity = 30.7760
+c4 perplexity = 23.5527
+
+pajama - 512
+wikitext2 perplexity = 25.9955
+ptb perplexity = 30.7507
+c4 perplexity = 23.7147
+
+pajama - 256
+wikitext2 perplexity = 25.6572
+ptb perplexity = 30.7253
+c4 perplexity = 23.6403
+
+pajama - 128
+wikitext2 perplexity = 25.3717
+ptb perplexity = 30.5710
+c4 perplexity = 23.7746
+
+pajama - 64
+wikitext2 perplexity = 25.8721
+ptb perplexity = 30.9529
+c4 perplexity = 23.7122
+
+pajama - 32
+wikitext2 perplexity = 25.4575
+ptb perplexity = 30.4148
+c4 perplexity = 23.4576
+
+pajama - 16
+wikitext2 perplexity = 26.2492
+ptb perplexity = 31.4758
+c4 perplexity = 24.1134
+
+pajama - 8
+wikitext2 perplexity = 26.0907
+ptb perplexity = 30.9314
+c4 perplexity = 23.5258
+
+
+c4 - 128
+wikitext2 perplexity = 26.1465
+ptb perplexity = 31.5839
+c4 perplexity = 24.0832
+
+c4 - 256
+wikitext2 perplexity = 25.6061
+ptb perplexity = 31.1767
+c4 perplexity = 23.8466

@@ -2,15 +2,11 @@ import numpy
 import torch
 import torch.nn
 
-# import bitsandbytes as bnb
-# from bitsandbytes.bitsandbytes.functional import quantize_4bit
-
-
 class BlockSparseMatrixBase(torch.nn.Module):
     # cols is a list of nonzero block column indexes (int32)
     # row_start is a index into cols (int32)
-    # Data is (len(cols), block_shape, block_shape)
-    def __init__(self, shape, block_mask, data, block_shape=(32, 32)):
+    # Data is (len(cols), block_shape, .)
+    def __init__(self, shape, block_mask, data, dense_data, sparse_data, block_shape=(32, 32)):
         super(BlockSparseMatrixBase, self).__init__()
         self.int_type = torch.int32
 
@@ -27,15 +23,35 @@ class BlockSparseMatrixBase(torch.nn.Module):
 
         self.block_mask = block_mask
 
+        self.dense_data = torch.nn.Parameter(dense_data)
+
+        self.sparse_data = torch.nn.Parameter(sparse_data)
+
         self.rebuild(block_mask, callback=False)
 
     def updated_data(self):
         pass
 
-    def get_differentiable_data(self):
+    def get_sparse_differentiable_data(self):
+        return self.sparse_data
+    
+    def get_dense_differentiable_data(self):
+        return self.dense_data
+
+    def get_block_sparse_data(self):
         return self.data
 
+    def get_block_mask_size(self):
+        return self.block_mask.shape[0]*self.block_mask.shape[1]
+    
+    def get_dense_data_size(self):
+        return self.dense_data.shape[0]*self.dense_data.shape[1]
+    
+    def get_sparse_data_size(self):
+        return self.block_mask.sum().item()*self.block_shape[0]*self.block_shape[1]
+
     def rebuild(self, block_mask, block_ptr=None, callback=True):
+        self.data.data = self.data.data.to(block_mask.device)
         data = self.data
         block_shape = self.block_shape
 
@@ -57,8 +73,8 @@ class BlockSparseMatrixBase(torch.nn.Module):
             raise Exception(
                 "data.shape[1] (%d) should be equal to block_shape[1] (%d)" % (data.shape[1], block_shape[1])
             )
-        if data.dtype != torch.float32:
-            raise Exception("data should be float32, not of type %s" % data.dtype)
+        if data.dtype != torch.float32 and data.dtype != torch.float16:
+            raise Exception("data should be float32 or float16, not of type %s" % data.dtype)
 
         for name in (
             "cols_a",
@@ -69,10 +85,10 @@ class BlockSparseMatrixBase(torch.nn.Module):
         ):
             self.register_buffer(name, locals()[name])
 
-        self.sanity_check(self.cols_a, self.row_start_ends_a, self.shape, self.block_shape)
+        self.sanity_check(cols_a, row_start_ends_a, self.shape, self.block_shape)
         self.sanity_check(
-            self.rows_b,
-            self.col_start_ends_b,
+            rows_b,
+            col_start_ends_b,
             (self.shape[1], self.shape[0]),
             (self.block_shape[1], self.block_shape[0]),
         )
@@ -83,6 +99,9 @@ class BlockSparseMatrixBase(torch.nn.Module):
     @staticmethod
     def blocks_count_(shape, block_shape):
         return torch.Size((shape[0] // block_shape[0], shape[1] // block_shape[1]))
+
+    def layer_size(self):
+        return self.shape[0] * self.shape[1]
 
     def blocks_count(self):
         return self.blocks_count_(self.shape, self.block_shape)
@@ -131,7 +150,7 @@ class BlockSparseMatrixBase(torch.nn.Module):
         # block_mask is a boolean mask that gives the block places
         # block_ptr, if not None, gives the block position in data for each element of cols_a, otherwise
         # assume that the content of block_ptr is just from 0..n_blocks
-        # Used to recycle blocks
+        # Used to recycle block
 
         nnz = torch.nonzero(block_mask, as_tuple=False)
 
@@ -154,6 +173,9 @@ class BlockSparseMatrixBase(torch.nn.Module):
         if verbose:
             print(f"row_start_ends_a=\n {self.row_start_ends_a}\ncols_a=\n {self.cols_a}\n")
             print(f"col_start_ends_b=\n {self.col_start_ends_b}\nrows_b=\n {self.rows_b}\n")
+
+        del nnz
+        torch.cuda.empty_cache()
 
         return blocks, cols_a, row_start_ends_a, rows_b, col_start_ends_b
 
@@ -224,7 +246,7 @@ class BlockSparseMatrixBase(torch.nn.Module):
         self.rebuild(block_mask, block_ptr)
 
     @classmethod
-    def zeros(cls, shape, n_blocks=None, blocks=None, block_shape=(32, 32), device="cuda"):
+    def zeros(cls, shape, n_blocks=None, blocks=None, block_mask=None, block_shape=(32, 32), device="cuda"):
         for i in range(2):
             if shape[i] % block_shape[i] != 0:
                 raise Exception(f"Invalid shape: shape[{i}]={shape[i]} %% block_shape[{i}]={block_shape[i]} is not 0.")
@@ -253,18 +275,35 @@ class BlockSparseMatrixBase(torch.nn.Module):
             positions = numpy.array(list(map(lambda b: b[0] * Y + b[1], blocks)))
         else:
             positions = numpy.random.choice(X * Y, size=n_blocks, replace=False)
-        positions = torch.tensor(positions, dtype=torch.int64, device=device).sort()[0]
 
-        block_mask = torch.zeros(X * Y, dtype=torch.bool, device=device)
-        block_mask[positions] = True
-        block_mask = block_mask.view(X, Y)
-        data = torch.zeros(
-            (n_blocks * block_shape[0], block_shape[1]),
-            dtype=torch.float,
+        if block_mask is None:
+            positions = torch.tensor(positions, dtype=torch.int64, device=device).sort()[0]
+
+            block_mask = torch.zeros(X * Y, dtype=torch.bool, device=device)
+            block_mask[positions] = True
+            block_mask = block_mask.view(X, Y)
+
+            del positions
+            
+        dense_data = torch.zeros(
+            shape,
+            dtype=torch.float16,
             device=device,
         )
 
-        return cls(shape, block_mask, data, block_shape)
+        sparse_data = torch.zeros(
+            shape,
+            dtype=torch.float16,
+            device=device,
+        )
+
+        data = torch.zeros(
+            (n_blocks * block_shape[0], block_shape[1]),
+            dtype=torch.float16,
+            device=device,
+        )
+
+        return cls(shape, block_mask, data, dense_data, sparse_data, block_shape)
 
     @classmethod
     def ones(
@@ -293,7 +332,7 @@ class BlockSparseMatrixBase(torch.nn.Module):
         positive=False,
         block_mask=None,
     ):
-        ret = cls.zeros(shape, n_blocks, blocks, block_shape, device)
+        ret = cls.zeros(shape, n_blocks, blocks, block_mask, block_shape, device)
         with torch.no_grad():
             if positive:
                 ret.data.normal_().abs_()
@@ -302,40 +341,23 @@ class BlockSparseMatrixBase(torch.nn.Module):
         ret.updated_data()
 
         # Block mask holds the weights which will be used for the sparse linear layer
-        
         block_mask = ret.block_mask
-        # Take the complement of the sparse mask
-        mask_indices = torch.argwhere(~block_mask).to(dtype=torch.long, device=device)
-        dense_num_blocks = torch.sum(~block_mask).item()
-        masking_weight = torch.zeros(shape).to(dtype=torch.float, device=device)
+        masking_weight = ret.get_masking_weight()
 
-        # 1's in sparse mask => weights are chosen => 1's on dense mask should be retained
-        
-        for i in range(dense_num_blocks):
-            xs = torch.arange(mask_indices[i,0]*block_shape[0], (mask_indices[i,0]+1)*block_shape[0])
-            ys = torch.arange(mask_indices[i,1]*block_shape[1], (mask_indices[i,1]+1)*block_shape[1])
-            x, y = torch.meshgrid(xs, ys, indexing='xy')
-            x = x.flatten()
-            y = y.flatten()
-            masking_weight[x,y] = 1
+        ret.dense_weight = torch.empty(shape).normal_(mean=0,std=1).to(device=device)*masking_weight
 
-        dense_weight = torch.empty(shape).normal_(mean=0,std=1).to(device=device)*masking_weight
-
-        return ret, dense_weight
-
+        return ret
     @classmethod
     def from_dense(cls, dense, block_shape=(32, 32), block_count=None, blocks=None, slow=False, out=None, block_mask=None):
         # Block mask holds the weights which will be used for the sparse linear layer
         if block_mask is None:
             X, Y = cls.blocks_count_(dense.shape, block_shape)
-            positions = numpy.random.choice(X * Y, size=block_count, replace=False)
-            positions = torch.tensor(positions, dtype=torch.int64, device=dense.device).sort()[0]
-            block_mask = torch.zeros(X * Y, dtype=torch.bool, device=dense.device)
+            rand_frac = numpy.random.rand(1)[0]
+            positions = numpy.random.choice(X * Y, size=1+int(X*Y*rand_frac), replace=False)
+            positions = torch.tensor(positions, dtype=torch.int64).sort()[0]
+            block_mask = torch.zeros(X * Y, dtype=torch.bool)
             block_mask[positions] = True
             block_mask = block_mask.view(X, Y)
-            block_count = torch.sum(block_mask).item()
-        else:
-            block_count = torch.sum(block_mask).item()
 
         if out is None:
             if blocks is None:
@@ -348,38 +370,40 @@ class BlockSparseMatrixBase(torch.nn.Module):
             ret = cls.zeros(
                 dense.shape,
                 n_blocks=block_count,
+                block_mask=block_mask,
                 block_shape=block_shape,
                 blocks=blocks,
-                device=dense.device,
+                device=dense.device
             )
-            
+
         else:
             ret = out
-        
-        mask_indices = torch.argwhere(~block_mask).to(dtype=torch.long, device=dense.device)
-        dense_num_blocks = torch.sum(~block_mask).item()
-        masking_weight = torch.zeros(dense.shape).to(dtype=torch.float, device=dense.device)
-
-        # 1's in sparse mask => weights are chosen => 1's on dense mask should be retained
-        
-        for i in range(dense_num_blocks):
-            xs = torch.arange(mask_indices[i,0]*block_shape[0], (mask_indices[i,0]+1)*block_shape[0])
-            ys = torch.arange(mask_indices[i,1]*block_shape[1], (mask_indices[i,1]+1)*block_shape[1])
-            x, y = torch.meshgrid(xs, ys, indexing='xy')
-            x = x.flatten()
-            y = y.flatten()
-            masking_weight[x,y] = 1
 
         # Build the indices
         blocks, cols_a, row_start_ends_a, rows_b, col_start_ends_b = ret.build_indices(block_mask)
+        ret.blocks = blocks
+        ret.cols_a = cols_a
+        ret.row_start_ends_a = row_start_ends_a
 
-        sparse_check = dense - masking_weight*dense
 
-        if out is not None or blocks is not None or block_count == dense_block_count:
+        del blocks
+        del cols_a
+        del row_start_ends_a
+        del rows_b
+        del col_start_ends_b
+
+        dense_weight = dense * ret.get_masking_weight(device = dense.device)
+        sparse_weight = dense * ret.get_complement_masking_weight(device = dense.device)
+
+        ret.dense_data.copy_(dense_weight)
+        ret.sparse_data.copy_(sparse_weight)
+
+        if out is not None or ret.blocks is not None or block_count == dense_block_count:
             # In case we keep the full matrix (block_count == dense_block_count), we make sure the
             # order is the right one, mostly for testing purposes.
             # coo = ret.build_coo_block_index().long()
-            fast_coo = ret.build_coo_block_index_fast(blocks, cols_a, row_start_ends_a).long()
+            fast_coo = ret.build_coo_block_index_fast(ret.blocks, ret.cols_a, ret.row_start_ends_a).long()
+            ret.fast_coo = fast_coo
             if slow:
                 # Legacy version, used for testing only
                 # for i in range(coo.shape[1]):
@@ -391,32 +415,22 @@ class BlockSparseMatrixBase(torch.nn.Module):
                     part = part.t().reshape(block_shape[0], block_shape[1])
                     with torch.no_grad():
                         ret.data[i * bs[0] : (i + 1) * bs[0]] = part
-                
-            else:
-                dense2 = dense.reshape(
-                    dense.shape[0] // block_shape[0], block_shape[0], dense.shape[1] // block_shape[1], block_shape[1]
-                )
-                # sparse_check2 = sparse_check.reshape(
-                #     dense.shape[0] // block_shape[0], block_shape[0], dense.shape[1] // block_shape[1], block_shape[1]
-                # )
-                dense2 = dense2.transpose(1, 2)
-                # sparse_check2 = sparse_check2.transpose(1, 2)
-                dense2 = dense2.transpose(2, 3)
-                # sparse_check2 = sparse_check2.transpose(2, 3)
-                dense2 = dense2.reshape(-1, block_shape[0], block_shape[1])
-                # sparse_check2 = sparse_check2.reshape(-1, block_shape[0], block_shape[1])
-                # indices = coo[0] * (dense.shape[1] // block_shape[1]) + coo[1]
-                indices = fast_coo[0] * (dense.shape[1] // block_shape[1]) + fast_coo[1]
-                # sparse_check_indices = fast_coo[0] * (dense.shape[1] // block_shape[1]) + fast_coo[1]
-                indices = indices.unsqueeze(-1).unsqueeze(-1).expand(-1, block_shape[0], block_shape[1])
-                # sparse_check_indices = sparse_check_indices.unsqueeze(-1).unsqueeze(-1).expand(-1, block_shape[0], block_shape[1])
-                new_data = torch.gather(dense2, 0, indices)
-                # sparse_check_data = torch.gather(sparse_check2, 0, sparse_check_indices)
-                new_data = new_data.reshape(-1, block_shape[1])
-                # sparse_check_data = sparse_check_data.reshape(-1, block_shape[1])
 
+            else:
+                dense2 = ret.sparse_data.reshape(
+                    ret.sparse_data.shape[0] // block_shape[0], block_shape[0], ret.sparse_data.shape[1] // block_shape[1], block_shape[1]
+                )
+                dense2 = dense2.transpose(1, 2)
+                dense2 = dense2.transpose(2, 3)
+                dense2 = dense2.reshape(-1, block_shape[0], block_shape[1])
+                indices = fast_coo[0] * (dense.shape[1] // block_shape[1]) + fast_coo[1]
+                indices = indices.unsqueeze(-1).unsqueeze(-1).expand(-1, block_shape[0], block_shape[1])
+                new_data = torch.gather(dense2, 0, indices.to(device=dense2.device))
+                new_data = new_data.reshape(-1, block_shape[1])
+         
                 with torch.no_grad():
                     ret.data.copy_(new_data)
+                    del new_data
         else:
             # We just keep the first elements in the dense matrix
             # Of course this only captures the statistical distribution in the dense matrix
@@ -424,15 +438,91 @@ class BlockSparseMatrixBase(torch.nn.Module):
             with torch.no_grad():
                 ret.data.copy_(dense.flatten()[:param_count].reshape(ret.data.shape))
 
+        # dense_weight = dense * ret.get_masking_weight().to(device = dense.device)
+        # sparse_weight = dense * ret.get_complement_masking_weight().to(device = dense.device)
+
+        del dense_weight
+        del sparse_weight
+        del dense
+
+        torch.cuda.empty_cache()
+
         ret.updated_data()
 
-        # w_4bit, quant_state = bnb.functional.quantize_4bit(ret.data, blocksize=block_shape[0]*block_shape[1], compress_statistics=False,
-        #                                                    quant_type='fp4', quant_storage=torch.uint8)
-        
-        # ret.data.copy_(w_4bit)
+        return ret
 
-        return ret, masking_weight
-        # return ret
+    def get_masking_weight(self, device = "cuda"):
+        mask_indices = torch.argwhere(~self.block_mask).to(dtype=torch.long)
+        dense_num_blocks = torch.sum(~self.block_mask).item()
+        masking_weight = torch.zeros(self.shape, dtype=torch.float, device = device)
+
+        # 1's in sparse mask => weights are chosen => 1's on dense mask should be retained
+        # move to cuda for computation
+        
+        for i in range(dense_num_blocks):
+            xs = torch.arange(mask_indices[i,0].item()*self.block_shape[0], (mask_indices[i,0].item()+1)*self.block_shape[0])
+            ys = torch.arange(mask_indices[i,1].item()*self.block_shape[1], (mask_indices[i,1].item()+1)*self.block_shape[1])
+            x, y = torch.meshgrid(xs, ys, indexing='xy')
+            x = x.flatten()
+            y = y.flatten()
+            masking_weight[x,y] = torch.ones(self.block_shape[0]*self.block_shape[1], dtype=torch.float, device = device)
+
+        del mask_indices
+
+        torch.cuda.empty_cache()
+
+        return masking_weight
+    
+    def get_complement_masking_weight(self, device = "cuda"):
+        mask_indices = torch.argwhere(self.block_mask).to(dtype=torch.long)
+        dense_num_blocks = torch.sum(self.block_mask).item()
+        masking_weight = torch.zeros(self.shape, dtype=torch.float, device = device)
+
+        # 1's in sparse mask => weights are chosen => 1's on dense mask should be retained
+        # move to cuda for computation
+        
+        for i in range(dense_num_blocks):
+            xs = torch.arange(mask_indices[i,0].item()*self.block_shape[0], (mask_indices[i,0].item()+1)*self.block_shape[0])
+            ys = torch.arange(mask_indices[i,1].item()*self.block_shape[1], (mask_indices[i,1].item()+1)*self.block_shape[1])
+            x, y = torch.meshgrid(xs, ys, indexing='xy')
+            x = x.flatten()
+            y = y.flatten()
+            masking_weight[x,y] = torch.ones(self.block_shape[0]*self.block_shape[1], dtype=torch.float, device = device)
+
+        del mask_indices
+
+        torch.cuda.empty_cache()
+
+        return masking_weight
+    
+    def update_block_sparse_weights(self):
+        """
+        Update the block sparse representation whenever qunatization or other changes are made to the layer weights
+        """
+        sparse_data = self.sparse_data * self.get_complement_masking_weight().to(device = self.sparse_data.device)
+        self.sparse_data.copy_(sparse_data)
+        del sparse_data
+        dense2 = self.sparse_data.reshape(
+            self.sparse_data.shape[0] // self.block_shape[0], self.block_shape[0], self.sparse_data.shape[1] // self.block_shape[1], self.block_shape[1]
+        ).to(self.sparse_data.device)
+        dense2 = dense2.transpose(1, 2)
+        dense2 = dense2.transpose(2, 3)
+        dense2 = dense2.reshape(-1, self.block_shape[0], self.block_shape[1])
+        indices = self.fast_coo[0] * (self.sparse_data.shape[1] // self.block_shape[1]) + self.fast_coo[1]
+        indices = indices.unsqueeze(-1).unsqueeze(-1).expand(-1, self.block_shape[0], self.block_shape[1]).to(dense2.device)
+        new_data = torch.gather(dense2, 0, indices)
+        new_data = new_data.reshape(-1, self.block_shape[1])
+
+        dense_data = self.dense_data * self.get_masking_weight().to(device = self.dense_data.device)
+    
+        self.data.copy_(new_data)
+        self.dense_data.copy_(dense_data)
+        del new_data
+        del dense_data
+
+        torch.cuda.empty_cache()
+
+        self.updated_data()
 
     def __repr__(self):
         return "%s(shape=%s, cols=%s, row_start_ends_a=%s, data=%s, block_shape=%s)" % (
@@ -784,22 +874,28 @@ class BlockSparseMatrix(BlockSparseMatrixBase):
     # cols is a list of nonzero block column indexes (int32)
     # row_start is a index into cols (int32)
     # Data is (len(cols), block_shape, block_shape)
-    def __init__(self, shape, block_mask, data, block_shape=(32, 32)):
+    def __init__(self, shape, block_mask, data, dense_data, sparse_data, block_shape=(32, 32)):
         if len(shape) != 2 or shape[0] % 32 != 0 or shape[1] % 32 != 0:
             raise Exception("shape should be a tuple of 2 multiples of 32")
 
         if len(block_shape) != 2 or block_shape[0] % 32 != 0 or block_shape[1] % 32 != 0:
             raise Exception("block_shape should be a tuple of 2 multiples of 32")
 
-        super(BlockSparseMatrix, self).__init__(shape, block_mask, data, block_shape)
+        super(BlockSparseMatrix, self).__init__(shape, block_mask, data, dense_data, sparse_data, block_shape)
+
+    #     self.register_parameter("_dense", None)
+    #     self.updated_data()
+
+    # def get_differentiable_data(self):
+    #     return self._dense
 
 
 class BlockSparseMatrixEmulator(BlockSparseMatrixBase):
     # cols is a list of nonzero block column indexes (int32)
     # row_start is a index into cols (int32)
     # Data is (len(cols), block_shape, block_shape)
-    def __init__(self, shape, block_mask, data, block_shape):
-        super(BlockSparseMatrixEmulator, self).__init__(shape, block_mask, data, block_shape)
+    def __init__(self, shape, block_mask, data, dense_data, sparse_data, block_shape=(32, 32)):
+        super(BlockSparseMatrixEmulator, self).__init__(shape, block_mask, data, dense_data, sparse_data, block_shape)
         self.register_parameter("_dense", None)
         self.updated_data()
 

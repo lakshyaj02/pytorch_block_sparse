@@ -1,0 +1,276 @@
+3/16, 16, 0.01
+wikitext2 perplexity = 25.6297
+ptb perplexity = 30.2490
+c4 perplexity = 23.6626
+total_gb_size = 0.22283935546875 GB
+
+
+4/16, 16, 0.01
+wikitext2 perplexity = 23.2004
+ptb perplexity = 27.2649
+c4 perplexity = 21.6120
+total_gb_size = 0.23455810546875 GB
+
+
+3/4, 16, 0.01
+wikitext2 perplexity = 98.9335
+ptb perplexity = 125.9238
+c4 perplexity = 67.3745
+total_gb_size = 0.08221435546875 GB
+
+
+4/4, 16, 0.01
+wikitext2 perplexity = 25.3339
+ptb perplexity = 31.4854
+c4 perplexity = 23.4065
+total_gb_size = 0.09393310546875 GB
+
+
+3/8, 16, 0.01
+wikitext2 perplexity = 25.5975
+ptb perplexity = 30.4201
+c4 perplexity = 23.7660
+total_gb_size = 0.12908935546875 GB
+
+
+4/8, 16, 0.01
+wikitext2 perplexity = 23.2206
+ptb perplexity = 27.2353
+c4 perplexity = 21.6583
+total_gb_size = 0.14080810546875 GB
+
+
+-------
+
+
+3/3, 16, 0.1
+wikitext2 perplexity = 33.5423
+ptb perplexity = 38.3097
+c4 perplexity = 29.2850
+total_gb_size = 0.07049560546875 GB
+
+
+4/3, 16, 0.1
+wikitext2 perplexity = 24.4004
+ptb perplexity = 28.6603
+c4 perplexity = 22.3147
+total_gb_size = 0.08221435546875 GB
+
+
+3/4, 16, 0.1
+wikitext2 perplexity = 29.5037
+ptb perplexity = 33.6574
+c4 perplexity = 26.2969
+total_gb_size = 0.08221435546875 GB
+
+
+4/4, 16, 0.1
+wikitext2 perplexity = 23.2553
+ptb perplexity = 27.5300
+c4 perplexity = 21.7945
+total_gb_size = 0.09393310546875 GB
+
+
+3/8, 16, 0.1
+wikitext2 perplexity = 28.8721
+ptb perplexity = 33.4303
+c4 perplexity = 26.1010
+total_gb_size = 0.12908935546875 GB
+
+
+4/8, 16, 0.1
+wikitext2 perplexity = 22.9712
+ptb perplexity = 27.4191
+c4 perplexity = 21.6360
+total_gb_size = 0.14080810546875 GB
+
+
+3/16, 16, 0.1
+wikitext2 perplexity = 29.5255
+ptb perplexity = 33.6618
+c4 perplexity = 26.1231
+total_gb_size = 0.22283935546875 GB
+
+
+-------
+
+3/4, 64, 0.01
+wikitext2 perplexity = 26043.4727
+ptb perplexity = 21651.1289
+c4 perplexity = 13819.1895
+total_gb_size = 0.08221435546875 GB
+
+
+4/4, 64, 0.01
+wikitext2 perplexity = 11550.2754
+ptb perplexity = 9721.7256
+c4 perplexity = 5484.9961
+total_gb_size = 0.09393310546875 GB
+
+
+3/8, 64, 0.01
+wikitext2 perplexity = 34.6902
+ptb perplexity = 41.6281
+c4 perplexity = 29.9666
+total_gb_size = 0.12908935546875 GB
+
+
+4/8, 64, 0.01
+wikitext2 perplexity = 23.3982
+ptb perplexity = 28.7712
+c4 perplexity = 22.3687
+total_gb_size = 0.14080810546875 GB
+
+
+3/16, 64, 0.01
+wikitext2 perplexity = 31.6140
+ptb perplexity = 38.5181
+c4 perplexity = 27.7131
+total_gb_size = 0.22283935546875 GB
+
+
+4/16, 64, 0.01
+wikitext2 perplexity = 23.2226
+ptb perplexity = 28.3990
+c4 perplexity = 22.1703
+total_gb_size = 0.23455810546875 GB
+
+
+-------
+
+3/4, 16, 0.001
+wikitext2 perplexity = 22.7856
+ptb perplexity = 27.4013
+c4 perplexity = 21.6432
+total_gb_size = 0.08221435546875 GB
+
+
+4/4, 16, 0.001
+wikitext2 perplexity = 58.4797
+ptb perplexity = 58.1295
+c4 perplexity = 46.3149
+total_gb_size = 0.09393310546875 GB
+
+
+3/8, 16, 0.001
+wikitext2 perplexity = 21.9501
+ptb perplexity = 26.1590
+c4 perplexity = 20.7295
+total_gb_size = 0.12908935546875 GB
+
+
+4/8, 16, 0.001
+wikitext2 perplexity = 22.2909
+ptb perplexity = 26.5606
+c4 perplexity = 20.9940
+total_gb_size = 0.14080810546875 GB
+
+
+3/16, 16, 0.001
+wikitext2 perplexity = 21.9406
+ptb perplexity = 26.1431
+c4 perplexity = 20.7265
+total_gb_size = 0.22283935546875 GB
+
+
+4/16, 16, 0.001
+wikitext2 perplexity = 22.2795
+ptb perplexity = 26.6125
+c4 perplexity = 20.9730
+total_gb_size = 0.23455810546875 GB
+
+
+-------
+
+3/4, 32, 0.05
+wikitext2 perplexity = 90.4956
+ptb perplexity = 99.4411
+c4 perplexity = 59.4961
+total_gb_size = 0.08221435546875 GB
+
+
+4/4, 32, 0.05
+wikitext2 perplexity = 22.9594
+ptb perplexity = 28.0012
+c4 perplexity = 22.0286
+total_gb_size = 0.09393310546875 GB
+
+
+3/8, 32, 0.05
+wikitext2 perplexity = 38.2632
+ptb perplexity = 42.9999
+c4 perplexity = 31.9946
+total_gb_size = 0.12908935546875 GB
+
+
+4/8, 32, 0.05
+wikitext2 perplexity = 23.2289
+ptb perplexity = 27.8473
+c4 perplexity = 21.8832
+total_gb_size = 0.14080810546875 GB
+
+
+3/16, 32, 0.05
+wikitext2 perplexity = 35.6871
+ptb perplexity = 39.9085
+c4 perplexity = 30.9291
+total_gb_size = 0.22283935546875 GB
+
+
+4/16, 32, 0.05
+wikitext2 perplexity = 22.8956
+ptb perplexity = 27.8328
+c4 perplexity = 21.8980
+total_gb_size = 0.23455810546875 GB
+
+
+------
+
+
+3/3, 16, 0.001
+wikitext2 perplexity = 28.8049
+ptb perplexity = 32.9964
+c4 perplexity = 26.3312
+total_gb_size = 0.0703582763671875 GB
+
+
+3/4, 16, 0.001
+wikitext2 perplexity = 22.9706
+ptb perplexity = 27.3668
+c4 perplexity = 21.5970
+total_gb_size = 0.0820770263671875 GB
+
+
+4/4, 16, 0.001
+wikitext2 perplexity = 148.1195
+ptb perplexity = 131.9098
+c4 perplexity = 100.3995
+total_gb_size = 0.0937957763671875 GB
+
+
+3/8, 16, 0.001
+wikitext2 perplexity = 21.9493
+ptb perplexity = 26.1408
+c4 perplexity = 20.7270
+total_gb_size = 0.1289520263671875 GB
+
+
+4/8, 16, 0.001
+wikitext2 perplexity = 22.3585
+ptb perplexity = 26.7190
+c4 perplexity = 21.0624
+total_gb_size = 0.1406707763671875 GB
+
+
+3/16, 16, 0.001
+wikitext2 perplexity = 21.9551
+ptb perplexity = 26.1295
+c4 perplexity = 20.7277
+total_gb_size = 0.2227020263671875 GB
+
+
+4/16, 16, 0.001
+wikitext2 perplexity = 22.3833
+ptb perplexity = 26.7549
+c4 perplexity = 21.0699
+total_gb_size = 0.2344207763671875 GB

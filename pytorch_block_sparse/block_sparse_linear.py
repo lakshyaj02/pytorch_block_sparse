@@ -1,4 +1,4 @@
-import math
+import numpy
 from typing import Tuple
 
 import torch
@@ -35,6 +35,7 @@ class BlockSparseLinearFunction(torch.autograd.Function):
 
         assert isinstance(weight, BlockSparseMatrixBase)
 
+        input = input.to(torch.float16)
         ctx.save_for_backward(input, weight_data)
         ctx.weight = weight
         output = weight.reverse_matmul(input, transpose=True)
@@ -172,6 +173,7 @@ class BlockSparseLinear(nn.Module):
         super(BlockSparseLinear, self).__init__()
         self.fn = BlockSparseLinearFunction.apply
         self.dense_fn = torch.nn.functional.linear
+        # self.dense_fn = torch.nn.Linear
         self.verbose = verbose
         self.block_shape = block_shape
         self._optimized = (
@@ -182,6 +184,8 @@ class BlockSparseLinear(nn.Module):
             in_features = torch_nn_linear.in_features
             out_features = torch_nn_linear.out_features
             bias = torch_nn_linear.bias is not None
+
+            # self.dense_fn = torch.nn.Linear(in_features, out_features, bias)
 
         if in_features % self.block_shape[1] != 0:
             raise Exception(
@@ -195,48 +199,57 @@ class BlockSparseLinear(nn.Module):
         if density < 0 or density > 1:
             raise Exception(f"BlockSparseLinear invalid density={density}")
 
-        self.block_count = int(density * (in_features * out_features / (self.block_shape[0] * self.block_shape[1])))
+        if block_mask is None:
+            X, Y = out_features // self.block_shape[0], in_features // self.block_shape[1]
+            rand_frac = density
+            # rand_frac = numpy.random.rand(1)[0]
+            positions = numpy.random.choice(X * Y, size=1+int(X*Y*rand_frac), replace=False)
+            positions = torch.tensor(positions, dtype=torch.int64, device=torch_nn_linear.weight.device).sort()[0]
+            block_mask = torch.zeros(X * Y, dtype=torch.bool, device=torch_nn_linear.weight.device)
+            block_mask[positions] = True
+            block_mask = block_mask.view(X, Y)
+            
+        self.sparse_block_count = torch.sum(block_mask).item()
+        # self.block_count = int(density * (in_features * out_features / (self.block_shape[0] * self.block_shape[1])))
+        self.block_count = int(in_features * out_features / (self.block_shape[0] * self.block_shape[1]))
 
         self.in_features = in_features
         self.out_features = out_features
 
-        block_shape = self.block_shape
-
         self.block_mask = block_mask
 
-        if self._optimized:
-            BlockSparseMatrixConstructor = BlockSparseMatrix
-        else:
-            BlockSparseMatrixConstructor = BlockSparseMatrixEmulator
+        # if self._optimized:
+        #     BlockSparseMatrixConstructor = BlockSparseMatrix
+        # else:
+        #     BlockSparseMatrixConstructor = BlockSparseMatrixEmulator
+        BlockSparseMatrixConstructor = BlockSparseMatrixEmulator
 
         if torch_nn_linear is not None:
             with torch.no_grad():
-                # add the sparse layer here to calulate its representation using the block mask
-                sparse_weight, dense_block_mask = BlockSparseMatrixConstructor.from_dense(torch_nn_linear.weight, block_shape, self.block_count, block_mask=self.block_mask)
+                # add the sparse layer here to calculate its representation using the block mask
+                sparse_weight = BlockSparseMatrixConstructor.from_dense(torch_nn_linear.weight, block_shape, block_count=self.sparse_block_count, block_mask=self.block_mask)
+                # if torch.allclose(sparse_weight.get_dense_differentiable_data(), torch_nn_linear.weight):
+                #     print("BlockSparseLinear: sparse_weight and torch_nn_linear.weight are close")
             
             # sparse_weight.multiply_(1.0 / math.sqrt(density))
-            dense_weight = torch_nn_linear.weight * dense_block_mask
+            # dense_weight = torch_nn_linear.weight * dense_block_mask.to(device = torch_nn_linear.weight.device)
             # dense_weight.multiply_(1.0 / math.sqrt(1-density))
         else:
-            sparse_weight, dense_weight = BlockSparseMatrixConstructor.randn(
+            sparse_weight = BlockSparseMatrixConstructor.randn(
                 (out_features, in_features),
                 self.block_count,
                 blocks=None,
                 block_shape=block_shape,
-                device="cuda",
+                device='cuda',
+                # device=torch_nn_linear.weight.device,
             )
-            # dense_weight = BlockSparseMatrixConstructor.randn(
-            #     (out_features, in_features),
-            #     int(self.block_count/density - self.block_count),
-            #     blocks=None,
-            #     block_shape=block_shape,
-            #     device="cuda",
-            # )
+
         self.sparse_weight = sparse_weight
-        self.dense_weight = dense_weight
+
+        del sparse_weight
 
         if bias:
-            self.bias = nn.Parameter(torch.zeros(out_features, device="cuda"))
+            self.bias = nn.Parameter(torch.zeros(out_features, device=torch_nn_linear.weight.device, dtype=torch.float16))
             if torch_nn_linear is not None:
                 with torch.no_grad():
                     self.bias.copy_(torch_nn_linear.bias)
@@ -245,11 +258,19 @@ class BlockSparseLinear(nn.Module):
 
     def forward(self, x):
         # x = self.fn(x, self.weight.get_differentiable_data(), self.weight)
-        x_sparse = self.fn(x, self.sparse_weight.get_differentiable_data(), self.sparse_weight)
-        x_dense = self.dense_fn(x, self.dense_weight, self.bias)
-        x = x_dense + x_sparse
+        # x = torch.squeeze(x)
+        x = x.to(self.sparse_weight.get_dense_differentiable_data().dtype)
         if self.bias is not None:
-            x = x + self.bias
+            self.bias.data = self.bias.to(x.dtype)
+        x_sparse = self.fn(x, self.sparse_weight.get_sparse_differentiable_data(), self.sparse_weight)
+        # print(self.bias.shape)
+        # print(x.shape)
+        # print(self.sparse_weight.get_dense_differentiable_data().shape)
+        # self.dense_fn.weight = self.sparse_weight.get_dense_differentiable_data()
+        # self.dense_fn.bias = self.bias
+        # x_dense = self.dense_fn(x)
+        x_dense = self.dense_fn(x, self.sparse_weight.get_dense_differentiable_data(), self.bias)
+        x = x_sparse + x_dense
         return x
 
 
